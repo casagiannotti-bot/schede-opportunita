@@ -1,0 +1,22 @@
+name: "Schede Opportunità"
+version: "1.1"
+slug: schede_opportunita
+description: "Schede opportunità (Prospect, Progetto, Delivery) e Day by Day, con note vocali tramite Gemini"
+arch:
+  - amd64
+  - aarch64
+startup: application
+boot: auto
+init: false
+ports:
+  8099/tcp: 8099
+ports_description:
+  8099/tcp: "Interfaccia web (da pubblicare solo tramite Nginx Proxy Manager con HTTPS)"
+options:
+  app_password: ""
+  gemini_api_key: ""
+  gemini_model: "gemini-2.5-flash"
+schema:
+  app_password: password
+  gemini_api_key: password?
+  gemini_model: str
