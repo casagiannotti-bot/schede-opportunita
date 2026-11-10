@@ -1,4 +1,4 @@
-# Schede Opportunità
+# Opportunity Desk
 
 Sostituto di Trello per le opportunità commerciali: schede con stato (Prospect → Progetto → Delivery → Fatto),
 storico dei cambi di stato, attività Day by Day collegabili alle schede, ricerca, esportazione/importazione e
@@ -24,7 +24,7 @@ Per provare anche la voce aggiungi `GEMINI_API_KEY` (il microfono funziona su `l
 2. Copia l'intera cartella `schede_opportunita` (con `config.yaml`, `Dockerfile` e `app/`) dentro la
    condivisione **addons**.
 3. In HA: *Impostazioni → Add-on → Add-on store → ⋮ → Controlla aggiornamenti*. In fondo compare
-   **Add-on locali → Schede Opportunità**: apri e premi **Installa**.
+   **Add-on locali → Opportunity Desk**: apri e premi **Installa**.
 4. Scheda **Configurazione**: imposta `app_password` (min. 8 caratteri, diversa da quella di HA),
    `gemini_api_key` e, se vuoi, `gemini_model`. Salva.
 5. Scheda **Info**: attiva **Avvia all'avvio** e **Watchdog**, poi **Avvia**.
@@ -57,6 +57,14 @@ Non pubblicare la porta 8099 direttamente sul router: l'unico ingresso da intern
 
 Apri l'indirizzo HTTPS in Safari → Condividi → **Aggiungi alla schermata Home**. Si apre a schermo intero
 come un'app. Il microfono funziona solo via HTTPS: al primo uso Safari chiede il permesso.
+
+## JSON dell'agent (preventivi)
+
+Dal menu ⋯ scegli **Incolla JSON dell'agent…**, incolla la risposta dell'agent (anche con il blocco
+```` ```json ````) e premi **Crea bozza**. Il server controlla il JSON e apre il form precompilato:
+nulla viene salvato finché non premi *Salva*. Campi: `cliente` (obbligatorio), `titolo`, `stato`
+(Prospect o Progetto), `tipologia`, `referente`, `contatti`, `valore` (numero, UT + CA), `data_apertura`
+e `scadenza` (AAAA-MM-GG), `note`, `attivita` (lista di `{titolo, data}`).
 
 ## Note vocali (Gemini)
 
