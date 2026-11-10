@@ -1,6 +1,6 @@
 {
-  "name": "Schede Opportunità",
-  "short_name": "Schede",
+  "name": "Opportunity Desk",
+  "short_name": "Opp. Desk",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f3f5f8",

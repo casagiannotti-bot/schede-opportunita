@@ -137,7 +137,10 @@ details.trans p { white-space: pre-wrap; color: var(--muted); font-size: .92rem;
 .menu { position: absolute; right: 12px; top: 54px; background: var(--card); color: var(--text); border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.3); padding: 6px; z-index: 20; min-width: 210px; }
 .menu button, .menu a { display: block; width: 100%; text-align: left; padding: 11px 12px; border: 0; background: transparent; border-radius: 8px; color: var(--text); text-decoration: none; }
 .menu button:hover, .menu a:hover { background: var(--panel); }
+.credit { background: var(--head); color: rgba(255,255,255,.85); font-size: .8rem; padding: calc(4px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-left, 0px)) 4px; }
 .ver { font-weight: 500; opacity: .65; font-size: .75rem; white-space: nowrap; }
 .verline { color: var(--muted); font-size: .8rem; padding: 8px 12px 4px; border-top: 1px solid var(--line); margin-top: 4px; }
 .toast { position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom)); transform: translateX(-50%);
   background: #222; color: #fff; padding: 10px 16px; border-radius: 10px; z-index: 50; max-width: 92vw; }
+
+.loginfoot { margin-top: 22px; text-align: center; font-size: .8rem; color: var(--muted); }

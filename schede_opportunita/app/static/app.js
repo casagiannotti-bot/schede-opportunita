@@ -5,6 +5,7 @@ const STATI = ['Prospect', 'Progetto', 'Delivery', 'Fatto'];
 const COLORI = { Prospect: 'var(--prospect)', Progetto: 'var(--progetto)', Delivery: 'var(--delivery)', Fatto: 'var(--fatto)' };
 const FATTO_VISIBILI = 30;
 const MAX_REC_SEC = 300;
+const APP_NAME = 'Opportunity Desk';  // cambia qui il nome dell'applicazione
 
 const S = {
   tab: 'schede', stato: 'Prospect', q: '', anno: '',
@@ -64,6 +65,10 @@ const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = se
 // ------------------------------------------------------------------------ login
 function showLogin(msg) {
   shell = null;
+  const ver = h('div', { class: 'loginfoot' }, 'Realizzato da Maurizio Giannotti');
+  fetch('/api/info').then((r) => r.json()).then((d) => {
+    if (d && d.versione) ver.textContent = 'Realizzato da Maurizio Giannotti · V ' + d.versione;
+  }).catch(() => {});
   const pwd = h('input', { type: 'password', placeholder: 'Password', autocomplete: 'current-password', autofocus: true });
   const err = h('div', { class: 'err' }, msg || '');
   const btn = h('button', { class: 'btn primary', type: 'submit', style: 'width:100%' }, 'Entra');
@@ -74,7 +79,7 @@ function showLogin(msg) {
       await api('POST', '/api/login', { password: pwd.value });
       start();
     } catch (e) { err.textContent = e.message; btn.disabled = false; pwd.select(); }
-  } }, h('h1', null, 'Schede'), h('p', null, 'Accedi per vedere le tue opportunità.'), pwd, err, btn);
+  } }, h('h1', null, APP_NAME), h('p', null, 'Accedi per vedere le tue opportunità.'), pwd, err, btn, ver);
   root.replaceChildren(form);
 }
 
@@ -93,8 +98,10 @@ function buildShell() {
       h('button', { class: 'tab' + (S.tab === k ? ' on' : ''), onclick: () => { S.tab = k; rebuildTabs(); refresh(); } }, label)));
   const content = h('main', { id: 'content' });
   const header = h('header', { class: 'top' },
-    h('h1', null, 'Schede', S.versione ? h('small', { class: 'ver' }, ' V ' + S.versione) : null), search, btnNew, btnMic, btnMenu);
-  root.replaceChildren(header, tabs, content);
+    h('h1', null, 'Schede'), search, btnNew, btnMic, btnMenu);
+  const credit = h('div', { class: 'credit' },
+    'Applicazione sviluppata da Maurizio Giannotti' + (S.versione ? ' · V ' + S.versione : ''));
+  root.replaceChildren(credit, header, tabs, content);
   shell = { header, tabs, content, btnMic, search };
 }
 
@@ -118,13 +125,14 @@ function toggleMenu() {
   menuEl = h('div', { class: 'menu', onclick: (e) => e.stopPropagation() },
     h('a', { href: '/api/export.json', download: '' }, 'Esporta tutto (JSON)'),
     h('a', { href: '/api/export.csv', download: '' }, 'Esporta schede (CSV per Excel)'),
+    h('button', { onclick: () => { closeMenu(); openPasteJson(); } }, 'Incolla JSON dell\'agent…'),
     h('button', { onclick: () => { file.click(); closeMenu(); } }, 'Importa file JSON…'),
     h('button', { onclick: async () => {
       closeMenu();
       try { const r = await api('POST', '/api/backup'); toast('Backup creato: ' + r.file); } catch (e) { toast(e.message); }
     } }, 'Crea backup ora'),
     h('button', { onclick: async () => { closeMenu(); await api('POST', '/api/logout'); showLogin(); } }, 'Esci'),
-    S.versione ? h('div', { class: 'verline' }, 'Schede Opportunità · V ' + S.versione) : null,
+    S.versione ? h('div', { class: 'verline' }, APP_NAME + ' · V ' + S.versione) : null,
     file);
   document.body.appendChild(menuEl);
 }
@@ -364,10 +372,12 @@ async function openForm(opts) {
       h('li', null, `${fmtDate(s.data.slice(0, 10))} – ${s.da ? s.da + ' → ' : 'Creata come '}${s.a}`))) : null;
 
     dlg.appendChild(h('div', { class: 'dlg' },
-      h('header', null, h('h3', null, isNew ? (draft ? 'Bozza da nota vocale' : 'Nuova scheda') : 'Scheda'),
+      h('header', null, h('h3', null, isNew ? (draft ? (draft.fonte === 'agent' ? 'Bozza dall\'agent' : 'Bozza da nota vocale') : 'Nuova scheda') : 'Scheda'),
         h('button', { class: 'btn', type: 'button', 'aria-label': 'Chiudi', onclick: () => dlg.close() }, '✕')),
       h('div', { class: 'content' },
-        draft ? h('div', { class: 'info' }, 'Bozza compilata da Gemini: controlla ogni campo prima di salvare. Niente è stato ancora registrato.') : null,
+        draft ? h('div', { class: 'info' }, draft.fonte === 'agent'
+          ? 'Bozza creata dal JSON dell\'agent: controlla ogni campo prima di salvare. Niente è stato ancora registrato.'
+          : 'Bozza compilata da Gemini: controlla ogni campo prima di salvare. Niente è stato ancora registrato.') : null,
         dupBanner,
         field('Cliente *', i.cliente),
         field('Titolo / oggetto', i.titolo),
@@ -388,6 +398,44 @@ async function openForm(opts) {
         h('button', { class: 'btn primary', onclick: save }, 'Salva'))));
     if (!isNew) renderAtt(o.attivita || []);
     newT.addEventListener('keydown', (e) => { if (e.key === 'Enter') addAtt(); });
+  });
+}
+
+// ------------------------------------------------------- JSON incollato dall'agent
+// Prende il JSON dal testo incollato: blocco ```json oppure il primo { ... } fino all'ultimo }.
+function extractJson(text) {
+  const m = text.match(/```json\s*([\s\S]*?)```/i);
+  if (m) return m[1].trim();
+  const a = text.indexOf('{');
+  const b = text.lastIndexOf('}');
+  return a >= 0 && b > a ? text.slice(a, b + 1) : '';
+}
+
+function openPasteJson() {
+  openDialog((dlg) => {
+    const err = h('div', { class: 'err', role: 'alert' });
+    const ta = h('textarea', { rows: '14', placeholder: 'Incolla qui la risposta dell\'agent (anche con il blocco ```json)',
+      style: 'width:100%;font-family:monospace;font-size:13px;box-sizing:border-box' });
+    const go = async () => {
+      err.textContent = '';
+      const txt = extractJson(ta.value);
+      if (!txt) { err.textContent = 'Non trovo un blocco JSON nel testo.'; return; }
+      let obj;
+      try { obj = JSON.parse(txt); } catch (e) { err.textContent = 'JSON non valido: ' + e.message; return; }
+      try {
+        const draft = await api('POST', '/api/bozza-json', obj);
+        dlg.close();
+        openForm({ draft, stato: draft.stato });
+      } catch (e) { err.textContent = e.message; }
+    };
+    dlg.appendChild(h('div', { class: 'dlg' },
+      h('header', null, h('h3', null, 'Incolla JSON dell\'agent'),
+        h('button', { class: 'btn', type: 'button', 'aria-label': 'Chiudi', onclick: () => dlg.close() }, '✕')),
+      h('div', { class: 'content' },
+        h('p', { class: 'hint' }, 'Il testo viene controllato e trasformato in una bozza. Nulla viene salvato finché non premi Salva.'),
+        ta, err),
+      h('footer', null, h('button', { class: 'btn', onclick: () => dlg.close() }, 'Annulla'),
+        h('button', { class: 'btn primary', onclick: go }, 'Crea bozza'))));
   });
 }
 
@@ -453,7 +501,7 @@ function openVoice() {
     const timer = h('div', { class: 'timer' }, '0:00');
     const err = h('div', { class: 'err', role: 'alert' });
     const btn = h('button', { class: 'recbtn', 'aria-label': 'Registra', onclick: () => (rec ? stop() : start()) }, '🎙');
-    const file = h('input', { type: 'file', accept: 'audio/*', hidden: true, onchange: async (e) => {
+    const file = h('input', { type: 'file', hidden: true, onchange: async (e) => {
       const f = e.target.files[0]; e.target.value = ''; if (!f || busy) return;
       try { setBusy('Preparo il file audio…'); send(await fileToWav(f)); } catch (er) { fail(er.message); }
     } });
