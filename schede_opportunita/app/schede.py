@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Schede Opportunità - gestione opportunità (Prospect / Progetto / Delivery / Fatto)
+"""Opportunity Desk - gestione opportunità (Prospect / Progetto / Delivery / Fatto)
 e attività Day by Day. Solo libreria standard di Python: SQLite + http.server.
 
 Avvio locale:   APP_PASSWORD=xxx python3 schede.py
@@ -53,7 +53,7 @@ GEMINI_API_KEY = OPTS.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY", 
 GEMINI_MODEL = OPTS.get("gemini_model") or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-VERSION = "1.1"
+VERSION = "1.6"
 STATI = ["Prospect", "Progetto", "Delivery", "Fatto"]
 OPP_FIELDS = ["cliente", "titolo", "stato", "referente", "contatti", "tipologia",
               "valore", "data_apertura", "scadenza", "data_chiusura", "note"]
@@ -578,6 +578,22 @@ def sanitize_draft(raw):
     }
 
 
+def json_to_draft(raw):
+    """Bozza da un JSON incollato dall'agent (preventivi). Non salva nulla."""
+    if not isinstance(raw, dict):
+        raise ApiError(400, "Il JSON deve essere un oggetto { ... }")
+    d = sanitize_draft(raw)
+    if not d["cliente"]:
+        raise ApiError(400, "Nel JSON manca il campo 'cliente'")
+    try:
+        d["data_apertura"] = _date(raw.get("data_apertura"), "data_apertura") or today_iso()
+    except ApiError:
+        d["data_apertura"] = today_iso()
+    d["attivita"] = [a for a in d["attivita"] if a.get("titolo")][:50]
+    d["fonte"] = "agent"
+    return d
+
+
 # --------------------------------------------------------------------- sessioni
 
 _fail_lock = threading.Lock()
@@ -756,6 +772,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/login" and method == "POST":
             return self.api_login()
+        if path == "/api/info" and method == "GET":  # pubblico: solo versione, per la pagina di login
+            return self.send_json(200, {"versione": VERSION})
         if path == "/api/logout" and method == "POST":
             return self.send_json(200, {"ok": True}, [("Set-Cookie", self.cookie("", 0))])
         if not self.authed():
@@ -888,6 +906,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(400, "Registrazione vuota o troppo breve")
             return self.send_json(200, voice_to_draft(audio, mime))
 
+        if path == "/api/bozza-json" and method == "POST":
+            return self.send_json(200, json_to_draft(self.read_json()))
+
         raise ApiError(404, "Risorsa non trovata")
 
 
@@ -897,7 +918,7 @@ def main():
     init_db()
     make_backup()
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-    print(f"Schede Opportunità V {VERSION} in ascolto sulla porta {PORT} - dati in {DATA_DIR}"
+    print(f"Opportunity Desk V {VERSION} in ascolto sulla porta {PORT} - dati in {DATA_DIR}"
           f" - voce Gemini {'attiva' if GEMINI_API_KEY else 'non configurata'}", flush=True)
     try:
         srv.serve_forever()
