@@ -3,6 +3,7 @@
 
 const STATI = ['Prospect', 'Progetto', 'Delivery', 'Fatto'];
 const COLORI = { Prospect: 'var(--prospect)', Progetto: 'var(--progetto)', Delivery: 'var(--delivery)', Fatto: 'var(--fatto)' };
+const ESITI = ['Vinta', 'Persa'];
 const FATTO_VISIBILI = 30;
 const MAX_REC_SEC = 300;
 const APP_NAME = 'Opportunity Desk';  // cambia qui il nome dell'applicazione
@@ -100,9 +101,11 @@ function buildShell() {
   const header = h('header', { class: 'top' },
     h('h1', null, 'Schede'), search, btnNew, btnMic, btnMenu);
   const credit = h('div', { class: 'credit' },
-    'Applicazione sviluppata da Maurizio Giannotti' + (S.versione ? ' · V ' + S.versione : ''));
-  root.replaceChildren(credit, header, tabs, content);
-  shell = { header, tabs, content, btnMic, search };
+    APP_NAME + ' - sviluppata da Maurizio Giannotti' + (S.versione ? ' · V ' + S.versione : ''));
+  // titolo + ricerca formano un unico frame fisso: non scorre con la pagina
+  const frame = h('div', { class: 'topframe' }, credit, header);
+  root.replaceChildren(frame, tabs, content);
+  shell = { frame, header, tabs, content, btnMic, search };
 }
 
 function rebuildTabs() {
@@ -134,6 +137,7 @@ function toggleMenu() {
     h('button', { onclick: async () => { closeMenu(); await api('POST', '/api/logout'); showLogin(); } }, 'Esci'),
     S.versione ? h('div', { class: 'verline' }, APP_NAME + ' · V ' + S.versione) : null,
     file);
+  if (shell && shell.frame) menuEl.style.top = Math.round(shell.frame.getBoundingClientRect().bottom + 4) + 'px';
   document.body.appendChild(menuEl);
 }
 function closeMenu() { if (menuEl) { menuEl.remove(); menuEl = null; } }
@@ -186,7 +190,12 @@ function renderBoard() {
         const id = Number(e.dataTransfer.getData('text/plain'));
         const o = S.opps.find((x) => x.id === id);
         if (!o || o.stato === st) return;
-        try { await api('PUT', '/api/opportunita/' + id, Object.assign({}, o, { stato: st })); toast(`Spostata in ${st}`); refresh(); }
+        let esito = '';
+        if (st === 'Fatto') {
+          esito = await askEsito();
+          if (!esito) return;
+        }
+        try { await api('PUT', '/api/opportunita/' + id, Object.assign({}, o, { stato: st, esito })); toast(`Spostata in ${st}`); refresh(); }
         catch (err) { toast(err.message); }
       } },
       h('h2', null, h('span', null, h('span', { class: 'dot', style: 'background:' + COLORI[st] }), st), h('span', { class: 'n' }, String(tot))),
@@ -199,8 +208,16 @@ function renderBoard() {
   c.replaceChildren(filters, chips, h('div', { class: 'board' }, cols));
 }
 
+function eurTag(label, n) {
+  return n !== null && n !== undefined ? h('span', { class: 'tag val' }, label + fmtEur(n)) : null;
+}
+
 function card(o, oggi) {
-  const late = o.scadenza && o.scadenza < oggi && o.stato !== 'Fatto';
+  const dataRif = o.stato === 'Delivery' ? o.data_collaudo : o.scadenza;
+  const late = dataRif && dataRif < oggi && o.stato !== 'Fatto';
+  const euro = o.stato === 'Prospect' ? [eurTag('', o.valore)]
+    : [eurTag('UT ', o.ut), eurTag('CA ', o.ca), eurTag('VEND. ', o.vendita)];
+  if (o.stato === 'Fatto' && euro.every((x) => !x)) euro.push(eurTag('', o.valore));
   const el = h('div', { class: 'card', role: 'button', tabindex: '0', draggable: 'true',
     onclick: () => openForm({ id: o.id }),
     onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openForm({ id: o.id }); } },
@@ -208,10 +225,13 @@ function card(o, oggi) {
     h('div', { class: 'cl' }, o.cliente),
     o.titolo ? h('div', { class: 'ti' }, o.titolo) : null,
     h('div', { class: 'meta' },
+      o.op_sdw ? h('span', { class: 'tag op' }, o.op_sdw) : null,
       o.tipologia ? h('span', { class: 'tag' }, o.tipologia) : null,
-      o.valore !== null && o.valore !== undefined ? h('span', { class: 'tag val' }, fmtEur(o.valore)) : null,
+      euro,
+      o.stato === 'Fatto' && o.esito ? h('span', { class: 'tag ' + (o.esito === 'Vinta' ? 'vinta' : 'persa') }, o.esito) : null,
       o.stato === 'Fatto' && o.data_chiusura ? h('span', { class: 'tag' }, '✓ ' + fmtDate(o.data_chiusura)) : null,
-      o.scadenza && o.stato !== 'Fatto' ? h('span', { class: 'tag' + (late ? ' late' : '') }, '⏰ ' + fmtDate(o.scadenza)) : null));
+      dataRif && o.stato !== 'Fatto'
+        ? h('span', { class: 'tag' + (late ? ' late' : '') }, '⏰ ' + (o.stato === 'Delivery' ? 'Collaudo ' : '') + fmtDate(dataRif)) : null));
   return el;
 }
 
@@ -274,6 +294,24 @@ function openDialog(build) {
   return dlg;
 }
 
+// Chiede l'esito (Vinta/Persa) quando una scheda viene trascinata in Fatto. Restituisce '' se annullato.
+function askEsito() {
+  return new Promise((resolve) => {
+    openDialog((dlg) => {
+      let scelta = '';
+      dlg.addEventListener('close', () => resolve(scelta));
+      const pick = (v) => () => { scelta = v; dlg.close(); };
+      dlg.appendChild(h('div', { class: 'dlg' },
+        h('header', null, h('h3', null, 'Come si è chiusa?'),
+          h('button', { class: 'btn', type: 'button', 'aria-label': 'Chiudi', onclick: () => dlg.close() }, '✕')),
+        h('div', { class: 'content' }, h('p', { class: 'hint' }, 'Scegli l\'esito: la scheda passa in Fatto.')),
+        h('footer', null, h('button', { class: 'btn', onclick: () => dlg.close() }, 'Annulla'),
+          h('button', { class: 'btn', onclick: pick('Persa') }, 'Persa'),
+          h('button', { class: 'btn primary', onclick: pick('Vinta') }, 'Vinta'))));
+    });
+  });
+}
+
 async function openForm(opts) {
   opts = opts || {};
   let o;
@@ -281,30 +319,73 @@ async function openForm(opts) {
   try {
     o = isNew
       ? Object.assign({ cliente: '', titolo: '', stato: opts.stato || 'Prospect', referente: '', contatti: '', tipologia: '',
-        valore: null, data_apertura: todayIso(), scadenza: '', data_chiusura: '', note: '', storico: [], attivita: [] }, opts.draft || {})
+        valore: null, data_apertura: todayIso(), scadenza: '', data_chiusura: '', note: '', storico: [], attivita: [],
+        op_sdw: '', team: '', ut: null, ca: null, vendita: null, data_collaudo: '', post_vendita: '', esito: '' }, opts.draft || {})
       : await api('GET', '/api/opportunita/' + opts.id);
   } catch (e) { toast(e.message); return; }
   const draft = opts.draft || null;
 
   openDialog((dlg) => {
     const err = h('div', { class: 'err', role: 'alert' });
+    const num = (v) => (v === null || v === undefined ? '' : String(v).replace('.', ','));
+    const eur = (v) => h('input', { type: 'text', inputmode: 'decimal', value: num(v), placeholder: '€' });
     const i = {
       cliente: h('input', { type: 'text', value: o.cliente || '', maxlength: '300', autocomplete: 'off' }),
+      op_sdw: h('input', { type: 'text', value: o.op_sdw || '', maxlength: '11', autocomplete: 'off',
+        autocapitalize: 'characters', spellcheck: 'false', 'aria-label': 'OP SDW' }),
       titolo: h('input', { type: 'text', value: o.titolo || '', maxlength: '300', placeholder: 'es. Migrazione a Google Workspace' }),
       stato: h('select', null, ...STATI.map((s) => h('option', { value: s, selected: s === o.stato }, s))),
+      esito: h('select', null, h('option', { value: '' }, '— scegli —'),
+        ...ESITI.map((s) => h('option', { value: s, selected: s === o.esito }, s))),
       tipologia: h('input', { type: 'text', value: o.tipologia || '', maxlength: '200', list: 'dl-tipologie' }),
       referente: h('input', { type: 'text', value: o.referente || '', maxlength: '300' }),
       contatti: h('input', { type: 'text', value: o.contatti || '', maxlength: '1000', placeholder: 'telefono, email…' }),
-      valore: h('input', { type: 'text', inputmode: 'decimal', value: o.valore === null || o.valore === undefined ? '' : String(o.valore).replace('.', ','), placeholder: '€' }),
+      team: h('input', { type: 'text', value: o.team || '', maxlength: '300' }),
+      valore: eur(o.valore),
+      ut: eur(o.ut),
+      ca: eur(o.ca),
+      vendita: eur(o.vendita),
       data_apertura: h('input', { type: 'date', value: o.data_apertura || '' }),
       scadenza: h('input', { type: 'date', value: o.scadenza || '' }),
+      data_collaudo: h('input', { type: 'date', value: o.data_collaudo || '' }),
       data_chiusura: h('input', { type: 'date', value: o.data_chiusura || '' }),
+      post_vendita: h('input', { type: 'text', value: o.post_vendita || '', maxlength: '300' }),
       note: h('textarea', { maxlength: '20000' }),
     };
     i.note.value = o.note || '';
-    const chiusuraField = field('Data chiusura', i.data_chiusura);
-    const syncChiusura = () => { chiusuraField.hidden = i.stato.value !== 'Fatto'; };
-    i.stato.addEventListener('change', syncChiusura); syncChiusura();
+    i.op_sdw.addEventListener('input', () => {  // sempre maiuscolo, solo lettere e numeri
+      const v = i.op_sdw.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (v !== i.op_sdw.value) i.op_sdw.value = v;
+    });
+
+    // Campi per stato. I campi nascosti restano nel database: nulla viene cancellato cambiando stato.
+    const fOp = field('OP SDW', i.op_sdw, 'opsdw');
+    const fEsito = field('Esito *', i.esito);
+    const fTeam = field('Team progettista / competence', i.team);
+    const fValore = field('Valore stimato (€)', i.valore);
+    const fScad = field('Scadenza', i.scadenza);
+    const fChiusura = field('Data chiusura', i.data_chiusura);
+    const rowCl = h('div', { class: 'rowcl' }, field('Cliente *', i.cliente, 'grow'), fOp);
+    const rowEco = h('div', { class: 'grid2' }, fValore, fScad);
+    const rowEuro = h('div', { class: 'grid3' },
+      field('UT (€)', i.ut), field('CA (€)', i.ca), field('VENDITA (€)', i.vendita));
+    const rowColl = h('div', { class: 'grid2' }, field('Data collaudo', i.data_collaudo), field('Nome post vendita', i.post_vendita));
+    const rowDate = h('div', { class: 'grid2' }, field('Data apertura', i.data_apertura), fChiusura);
+    const syncStato = () => {
+      const st = i.stato.value;
+      const dalProgetto = st !== 'Prospect';
+      fOp.hidden = !dalProgetto;
+      fTeam.hidden = !dalProgetto;
+      rowEuro.hidden = !dalProgetto;
+      fValore.hidden = !(st === 'Prospect' || (st === 'Fatto' && i.valore.value.trim() !== ''));
+      fScad.hidden = !(st === 'Prospect' || st === 'Progetto');
+      rowEco.hidden = fValore.hidden && fScad.hidden;
+      rowColl.hidden = !(st === 'Delivery' || st === 'Fatto');
+      fEsito.hidden = st !== 'Fatto';
+      fChiusura.hidden = st !== 'Fatto';
+    };
+    i.stato.addEventListener('change', syncStato);
+    syncStato();
 
     const dl = h('datalist', { id: 'dl-tipologie' }, ...S.tipologie.map((t) => h('option', { value: t })));
 
@@ -348,6 +429,7 @@ async function openForm(opts) {
     const save = async () => {
       err.textContent = '';
       if (!i.cliente.value.trim()) { err.textContent = 'Il campo Cliente è obbligatorio.'; i.cliente.focus(); return; }
+      if (i.stato.value === 'Fatto' && !i.esito.value) { err.textContent = 'Indica l\'esito: Vinta o Persa.'; i.esito.focus(); return; }
       const payload = {};
       for (const k of Object.keys(i)) payload[k] = i[k].value;
       try {
@@ -379,12 +461,16 @@ async function openForm(opts) {
           ? 'Bozza creata dal JSON dell\'agent: controlla ogni campo prima di salvare. Niente è stato ancora registrato.'
           : 'Bozza compilata da Gemini: controlla ogni campo prima di salvare. Niente è stato ancora registrato.') : null,
         dupBanner,
-        field('Cliente *', i.cliente),
+        rowCl,
         field('Titolo / oggetto', i.titolo),
         h('div', { class: 'grid2' }, field('Stato', i.stato), field('Tipologia', i.tipologia)),
+        fEsito,
         h('div', { class: 'grid2' }, field('Referente', i.referente), field('Contatti', i.contatti)),
-        h('div', { class: 'grid2' }, field('Valore stimato (€)', i.valore), field('Scadenza', i.scadenza)),
-        h('div', { class: 'grid2' }, field('Data apertura', i.data_apertura), chiusuraField),
+        fTeam,
+        rowEco,
+        rowEuro,
+        rowColl,
+        rowDate,
         field('Note', i.note),
         dl,
         draft && draft.trascrizione ? h('details', { class: 'trans' }, h('summary', null, 'Trascrizione dell\'audio'), h('p', null, draft.trascrizione)) : null,
