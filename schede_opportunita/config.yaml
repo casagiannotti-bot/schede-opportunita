@@ -1,5 +1,5 @@
 name: "Opportunity Desk"
-version: "1.6"
+version: "1.7"
 slug: schede_opportunita
 description: "Schede opportunità (Prospect, Progetto, Delivery) e Day by Day, con note vocali tramite Gemini"
 arch:

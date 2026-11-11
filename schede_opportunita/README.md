@@ -58,6 +58,18 @@ Non pubblicare la porta 8099 direttamente sul router: l'unico ingresso da intern
 Apri l'indirizzo HTTPS in Safari → Condividi → **Aggiungi alla schermata Home**. Si apre a schermo intero
 come un'app. Il microfono funziona solo via HTTPS: al primo uso Safari chiede il permesso.
 
+## Campi per stato
+
+- **Prospect**: cliente, titolo, tipologia, referente, contatti, valore stimato, scadenza, note.
+- **Progetto**: in più OP SDW (max 11 caratteri alfanumerici, sempre maiuscolo, accanto al cliente), team
+  progettista/competence e le voci UT, CA e VENDITA al posto del valore stimato, che non viene riportato.
+- **Delivery**: in più data collaudo (inserita a mano, parte vuota, al posto della scadenza) e nome post vendita.
+- **Fatto**: esito **Vinta** o **Persa** (obbligatorio) e data chiusura. Trascinando una scheda in Fatto l'app chiede l'esito.
+
+Cambiando stato nessun dato viene cancellato: i campi non pertinenti restano nel database, solo nascosti
+(l'esito e la data chiusura si azzerano uscendo da Fatto). La ricerca copre anche OP SDW, team e post vendita.
+Aggiornando da una versione precedente il database viene migrato da solo, dopo un backup automatico.
+
 ## JSON dell'agent (preventivi)
 
 Dal menu ⋯ scegli **Incolla JSON dell'agent…**, incolla la risposta dell'agent (anche con il blocco
