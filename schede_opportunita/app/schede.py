@@ -53,10 +53,19 @@ GEMINI_API_KEY = OPTS.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY", 
 GEMINI_MODEL = OPTS.get("gemini_model") or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-VERSION = "1.6"
+VERSION = "1.7"
 STATI = ["Prospect", "Progetto", "Delivery", "Fatto"]
+ESITI = ["Vinta", "Persa"]
+OP_SDW_MAX = 11
+OP_SDW_RE = re.compile(r"[A-Z0-9]{0,%d}" % OP_SDW_MAX)
 OPP_FIELDS = ["cliente", "titolo", "stato", "referente", "contatti", "tipologia",
-              "valore", "data_apertura", "scadenza", "data_chiusura", "note"]
+              "valore", "data_apertura", "scadenza", "data_chiusura", "note",
+              "op_sdw", "team", "ut", "ca", "vendita", "data_collaudo", "post_vendita", "esito"]
+# Colonne aggiunte nella V 1.7: i database esistenti vengono migrati all'avvio senza perdere nulla.
+NEW_COLUMNS = [("op_sdw", "TEXT NOT NULL DEFAULT ''"), ("team", "TEXT NOT NULL DEFAULT ''"),
+               ("ut", "REAL"), ("ca", "REAL"), ("vendita", "REAL"),
+               ("data_collaudo", "TEXT"), ("post_vendita", "TEXT NOT NULL DEFAULT ''"),
+               ("esito", "TEXT")]
 SESSION_DAYS = 14
 MAX_JSON = 5 * 1024 * 1024
 MAX_AUDIO = 25 * 1024 * 1024
@@ -101,7 +110,15 @@ CREATE TABLE IF NOT EXISTS opportunita (
     data_chiusura TEXT,
     note TEXT NOT NULL DEFAULT '',
     creata_il TEXT NOT NULL,
-    aggiornata_il TEXT NOT NULL
+    aggiornata_il TEXT NOT NULL,
+    op_sdw TEXT NOT NULL DEFAULT '',
+    team TEXT NOT NULL DEFAULT '',
+    ut REAL,
+    ca REAL,
+    vendita REAL,
+    data_collaudo TEXT,
+    post_vendita TEXT NOT NULL DEFAULT '',
+    esito TEXT
 );
 CREATE TABLE IF NOT EXISTS storico_stati (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,10 +150,25 @@ def db():
     return conn
 
 
+def _missing_columns(conn):
+    """Colonne della V 1.7 assenti in un database creato da una versione precedente."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(opportunita)")}
+    return [(n, d) for n, d in NEW_COLUMNS if cols and n not in cols]
+
+
 def init_db():
     conn = db()
     try:
+        missing = _missing_columns(conn)
+    finally:
+        conn.close()
+    if missing:
+        make_backup(force=True)  # copia di sicurezza prima di modificare lo schema
+    conn = db()
+    try:
         conn.executescript(SCHEMA_SQL)
+        for name, ddl in _missing_columns(conn):
+            conn.execute(f"ALTER TABLE opportunita ADD COLUMN {name} {ddl}")
         conn.commit()
     finally:
         conn.close()
@@ -215,6 +247,8 @@ def _valore(v):
             v = v.replace("€", "").replace(" ", "")
             if "," in v:  # formato italiano 12.500,50
                 v = v.replace(".", "").replace(",", ".")
+            elif re.fullmatch(r"\d{1,3}(\.\d{3})+", v):  # 12.500 = dodicimilacinquecento
+                v = v.replace(".", "")
         n = float(v)
     except (TypeError, ValueError):
         raise ApiError(400, "Valore non numerico")
@@ -223,7 +257,7 @@ def _valore(v):
     return n
 
 
-def clean_opp(data):
+def clean_opp(data, require_esito=True):
     if not isinstance(data, dict):
         raise ApiError(400, "Dati non validi")
     cliente = _text(data.get("cliente"), 300)
@@ -232,6 +266,17 @@ def clean_opp(data):
     stato = _text(data.get("stato")) or "Prospect"
     if stato not in STATI:
         raise ApiError(400, "Stato non valido")
+    op_sdw = _text(data.get("op_sdw"), 40).upper()
+    if not OP_SDW_RE.fullmatch(op_sdw):
+        raise ApiError(400, f"OP SDW: al massimo {OP_SDW_MAX} caratteri, solo lettere e numeri")
+    esito = _text(data.get("esito"), 20)
+    if esito and esito not in ESITI:
+        raise ApiError(400, "Esito non valido (Vinta o Persa)")
+    if stato == "Fatto":
+        if require_esito and not esito:
+            raise ApiError(400, "Indica l'esito: Vinta o Persa")
+    else:
+        esito = ""  # l'esito ha senso solo in Fatto
     return {
         "cliente": cliente,
         "titolo": _text(data.get("titolo"), 300),
@@ -244,6 +289,14 @@ def clean_opp(data):
         "scadenza": _date(data.get("scadenza"), "scadenza"),
         "data_chiusura": _date(data.get("data_chiusura"), "data_chiusura"),
         "note": _text(data.get("note")),
+        "op_sdw": op_sdw,
+        "team": _text(data.get("team"), 300),
+        "ut": _valore(data.get("ut")),
+        "ca": _valore(data.get("ca")),
+        "vendita": _valore(data.get("vendita")),
+        "data_collaudo": _date(data.get("data_collaudo"), "data_collaudo"),
+        "post_vendita": _text(data.get("post_vendita"), 300),
+        "esito": esito or None,
     }
 
 
@@ -290,7 +343,8 @@ def like_clause(terms, fields):
 def list_opp(conn, q="", stato="", anno=""):
     where, params = [], []
     terms = [t for t in re.split(r"\s+", q.strip()) if t]
-    c, p = like_clause(terms, ["cliente", "titolo", "referente", "contatti", "tipologia", "note"])
+    c, p = like_clause(terms, ["cliente", "titolo", "referente", "contatti", "tipologia", "note",
+                               "op_sdw", "team", "post_vendita"])
     where += c
     params += p
     if stato in STATI:
@@ -302,7 +356,8 @@ def list_opp(conn, q="", stato="", anno=""):
     sql = "SELECT * FROM opportunita"
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY COALESCE(scadenza,'9999-12-31'), cliente COLLATE NOCASE"
+    sql += (" ORDER BY COALESCE(CASE WHEN stato='Delivery' THEN data_collaudo ELSE scadenza END,"
+            "'9999-12-31'), cliente COLLATE NOCASE")
     return [dict(r) for r in conn.execute(sql, params)]
 
 
@@ -318,6 +373,15 @@ def get_opp(conn, oid):
     return d
 
 
+def _insert_row(conn, c, creata, aggiornata):
+    cols = ", ".join(OPP_FIELDS)
+    marks = ", ".join("?" for _ in range(len(OPP_FIELDS) + 2))
+    cur = conn.execute(
+        f"INSERT INTO opportunita ({cols}, creata_il, aggiornata_il) VALUES ({marks})",
+        [c[f] for f in OPP_FIELDS] + [creata, aggiornata])
+    return cur.lastrowid
+
+
 def insert_opp(conn, c, attivita=None):
     now = now_iso()
     if not c["data_apertura"]:
@@ -326,13 +390,7 @@ def insert_opp(conn, c, attivita=None):
         c["data_chiusura"] = today_iso()
     if c["stato"] != "Fatto":
         c["data_chiusura"] = None
-    cur = conn.execute(
-        """INSERT INTO opportunita (cliente,titolo,stato,referente,contatti,tipologia,valore,
-           data_apertura,scadenza,data_chiusura,note,creata_il,aggiornata_il)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (c["cliente"], c["titolo"], c["stato"], c["referente"], c["contatti"], c["tipologia"],
-         c["valore"], c["data_apertura"], c["scadenza"], c["data_chiusura"], c["note"], now, now))
-    oid = cur.lastrowid
+    oid = _insert_row(conn, c, now, now)
     conn.execute("INSERT INTO storico_stati (opportunita_id, da, a, data) VALUES (?,?,?,?)",
                  (oid, None, c["stato"], now))
     for a in (attivita or [])[:50]:
@@ -351,11 +409,9 @@ def update_opp(conn, oid, c):
         c["data_chiusura"] = today_iso()
     if c["stato"] != "Fatto":
         c["data_chiusura"] = None
-    conn.execute(
-        """UPDATE opportunita SET cliente=?,titolo=?,stato=?,referente=?,contatti=?,tipologia=?,
-           valore=?,data_apertura=?,scadenza=?,data_chiusura=?,note=?,aggiornata_il=? WHERE id=?""",
-        (c["cliente"], c["titolo"], c["stato"], c["referente"], c["contatti"], c["tipologia"],
-         c["valore"], c["data_apertura"], c["scadenza"], c["data_chiusura"], c["note"], now, oid))
+    sets = ", ".join(f"{f}=?" for f in OPP_FIELDS)
+    conn.execute(f"UPDATE opportunita SET {sets}, aggiornata_il=? WHERE id=?",
+                 [c[f] for f in OPP_FIELDS] + [now, oid])
     if old["stato"] != c["stato"]:
         conn.execute("INSERT INTO storico_stati (opportunita_id, da, a, data) VALUES (?,?,?,?)",
                      (oid, old["stato"], c["stato"], now))
@@ -414,18 +470,11 @@ def import_all(conn, payload):
             stor_by_old.setdefault(s.get("opportunita_id"), []).append(s)
     for o in payload["opportunita"][:20000]:
         try:
-            c = clean_opp(o)
+            c = clean_opp(o, require_esito=False)  # i vecchi export non hanno l'esito
         except ApiError:
             continue
         creata = _text(o.get("creata_il"), 30) or now_iso()
-        cur = conn.execute(
-            """INSERT INTO opportunita (cliente,titolo,stato,referente,contatti,tipologia,valore,
-               data_apertura,scadenza,data_chiusura,note,creata_il,aggiornata_il)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (c["cliente"], c["titolo"], c["stato"], c["referente"], c["contatti"], c["tipologia"],
-             c["valore"], c["data_apertura"], c["scadenza"], c["data_chiusura"], c["note"],
-             creata, _text(o.get("aggiornata_il"), 30) or creata))
-        new_id = cur.lastrowid
+        new_id = _insert_row(conn, c, creata, _text(o.get("aggiornata_il"), 30) or creata)
         idmap[o.get("id")] = new_id
         n_opp += 1
         storici = stor_by_old.get(o.get("id")) or [{"da": None, "a": c["stato"], "data": creata}]
